@@ -4,9 +4,9 @@
 
 **Goal:** When kobolds die, they leave a burning fire zone that damages players and empowers other kobolds standing in it.
 
-**Architecture:** Custom CreatureScript hooks into kobold death events to spawn a fire GameObject. A periodic aura checks positions and applies buffs/damage. All server-side using existing client visuals.
+**Architecture:** Custom CreatureScript hooks into kobold death events to spawn a visual-only fire GameObject. C++ code handles all damage/buff logic by checking positions periodically. No custom spells needed.
 
-**Tech Stack:** C++ (AzerothCore scripting API), SQL (spell/gameobject definitions), Display ID 5752 (fire visual)
+**Tech Stack:** C++ (AzerothCore scripting API), SQL (gameobject template only), Display ID 5752 (fire visual)
 
 ---
 
@@ -19,140 +19,72 @@ Kobold Entries:
 
 Fire Mechanics:
 - Radius: 8 yards
-- Duration: 10 minutes (600,000 ms)
-- Player damage: ~10% max HP per tick
+- Duration: 10 minutes (600 seconds)
+- Player damage: ~10% max HP per 2 seconds
 
-Candle Frenzy Buff:
-- Damage modifier: +100% (2x)
-- Attack speed: +100%
+Candle Frenzy (applied via C++):
+- Damage multiplier: 2x (100% increase)
+- Attack speed: 2x faster (50% reduction in attack time)
 - Movement speed: +50%
 
 Display ID: 5752 (Consuming Flames visual)
+GameObject Entry: 900001
+Zone ID Northshire: 9
 ```
 
 ---
 
-## Task 1: Create Custom Spell - Candle Frenzy Buff
-
-**Files:**
-- Create: `data/sql/updates/pending_db_world/nightmare_kobold_candle_frenzy_spell.sql`
-
-**Step 1: Define the Candle Frenzy aura spell**
-
-We need a buff that kobolds receive when inside fire. Using spell_dbc to create a custom spell.
-
-```sql
--- Candle Frenzy buff for kobolds in fire
--- Custom spell ID: 99001 (high ID to avoid conflicts)
-
-DELETE FROM `spell_dbc` WHERE `ID` = 99001;
-INSERT INTO `spell_dbc` (`ID`, `Attributes`, `AttributesEx`, `AttributesEx2`, `AttributesEx3`, `AttributesEx4`, `AttributesEx5`, `AttributesEx6`, `AttributesEx7`, `CastingTimeIndex`, `DurationIndex`, `RangeIndex`, `Speed`, `SpellVisual1`, `SpellIconID`, `ActiveIconID`, `SpellName`, `DmgClass`, `EffectApplyAuraName1`, `EffectApplyAuraName2`, `EffectApplyAuraName3`, `Effect1`, `Effect2`, `Effect3`, `EffectBasePoints1`, `EffectBasePoints2`, `EffectBasePoints3`, `EffectMiscValue1`, `EffectMiscValue2`, `EffectMiscValue3`, `EffectImplicitTargetA1`, `EffectImplicitTargetA2`, `EffectImplicitTargetA3`) VALUES
-(99001, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21, 1, 0, 0, 1, 0, 'Candle Frenzy', 0,
-79,   -- SPELL_AURA_MOD_DAMAGE_PERCENT_DONE (effect 1: +100% damage)
-107,  -- SPELL_AURA_MOD_HASTE (effect 2: +100% attack speed)
-31,   -- SPELL_AURA_MOD_SPEED_ALWAYS (effect 3: +50% move speed)
-6, 6, 6,  -- SPELL_EFFECT_APPLY_AURA for all 3
-100, 100, 50,  -- Base points: +100% dmg, +100% haste, +50% speed
-127, 0, 0,    -- Misc values (127 = all damage schools for effect 1)
-1, 1, 1);     -- Target self
-```
-
-**Step 2: Verify SQL syntax**
-
-Run: `cat data/sql/updates/pending_db_world/nightmare_kobold_candle_frenzy_spell.sql`
-Expected: SQL file contents displayed without syntax errors
-
-**Step 3: Commit**
-
-```bash
-git add data/sql/updates/pending_db_world/nightmare_kobold_candle_frenzy_spell.sql
-git commit -m "feat(DB): add Candle Frenzy buff spell for nightmare kobolds"
-```
-
----
-
-## Task 2: Create Custom Spell - Fire Zone Damage Aura
-
-**Files:**
-- Modify: `data/sql/updates/pending_db_world/nightmare_kobold_candle_frenzy_spell.sql`
-
-**Step 1: Add fire zone damage spell**
-
-This spell damages players standing in the fire. Using percentage-based damage.
-
-```sql
--- Fire Zone damage aura
--- Custom spell ID: 99002
--- Deals periodic damage to players in fire
-
-DELETE FROM `spell_dbc` WHERE `ID` = 99002;
-INSERT INTO `spell_dbc` (`ID`, `Attributes`, `AttributesEx`, `AttributesEx2`, `AttributesEx3`, `AttributesEx4`, `AttributesEx5`, `AttributesEx6`, `AttributesEx7`, `CastingTimeIndex`, `DurationIndex`, `RangeIndex`, `Speed`, `SpellVisual1`, `SpellIconID`, `ActiveIconID`, `SpellName`, `DmgClass`, `Effect1`, `EffectApplyAuraName1`, `EffectBasePoints1`, `EffectMiscValue1`, `EffectAmplitude1`, `EffectImplicitTargetA1`) VALUES
-(99002, 0, 0, 0, 0, 0, 0, 0, 0, 1, 21, 1, 0, 5765, 1, 0, 'Candle Fire', 1,
-6,    -- SPELL_EFFECT_APPLY_AURA
-3,    -- SPELL_AURA_PERIODIC_DAMAGE
-10,   -- Base damage (we'll scale this in script based on max HP)
-2,    -- Fire damage school
-2000, -- Amplitude: tick every 2 seconds
-1);   -- Target self
-```
-
-**Step 2: Commit**
-
-```bash
-git add data/sql/updates/pending_db_world/nightmare_kobold_candle_frenzy_spell.sql
-git commit -m "feat(DB): add Candle Fire damage spell for fire zones"
-```
-
----
-
-## Task 3: Create Fire Zone GameObject Template
+## Task 1: Create Fire Zone GameObject Template
 
 **Files:**
 - Create: `data/sql/updates/pending_db_world/nightmare_kobold_fire_gameobject.sql`
 
-**Step 1: Define custom fire trap GameObject**
+**Step 1: Define custom fire visual GameObject**
 
-Based on existing "Roaring Flame" (179065) but customized for our needs.
+Type 5 is GENERIC (visual only). All damage logic handled in C++.
 
 ```sql
 -- Nightmare Kobold Fire Zone
 -- Custom entry: 900001 (high to avoid conflicts)
--- Type 6 = TRAP, Display 5752 = Consuming Flames visual
+-- Type 5 = GENERIC (visual only), Display 5752 = Consuming Flames visual
+-- Size 2.0 scales the visual to approximately 8 yards
 
 DELETE FROM `gameobject_template` WHERE `entry` = 900001;
 INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `IconName`, `castBarCaption`, `unk1`, `size`, `Data0`, `Data1`, `Data2`, `Data3`, `Data4`, `Data5`, `Data6`, `Data7`, `Data8`, `Data9`, `Data10`, `Data11`, `Data12`, `Data13`, `Data14`, `Data15`, `Data16`, `Data17`, `Data18`, `Data19`, `Data20`, `Data21`, `Data22`, `Data23`, `AIName`, `ScriptName`, `VerifiedBuild`) VALUES
 (900001, 5, 5752, 'Kobold Candle Fire', '', '', '', 2.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', 0);
-
--- Note: Using type 5 (GENERIC) for visual only
--- Damage will be handled by the C++ script checking proximity
--- Size 2.0 scales the visual to approximately 8 yards
 ```
 
 **Step 2: Commit**
 
 ```bash
+cd /home/hhess/dev/azerothcore
 git add data/sql/updates/pending_db_world/nightmare_kobold_fire_gameobject.sql
-git commit -m "feat(DB): add Kobold Candle Fire gameobject template"
+git commit -m "feat(DB): add Kobold Candle Fire visual gameobject template"
 ```
 
 ---
 
-## Task 4: Create Nightmare Kobold Script Header
+## Task 2: Create Nightmare Kobold Script File
 
 **Files:**
-- Create: `src/server/scripts/Custom/nightmare_northshire.h`
+- Create: `src/server/scripts/Custom/nightmare_northshire.cpp`
 
-**Step 1: Create header with constants and declarations**
+**Step 1: Create the complete script file**
+
+This single file contains:
+- Constants
+- Fire position tracking
+- Kobold AI with death fire spawn and Candle Frenzy buff logic
+- Player damage script with static timer map
 
 ```cpp
 /*
  * Nightmare Northshire - Kobold Fire Mechanics
- * When kobolds die, they leave burning fire zones
- * Kobolds in fire gain Candle Frenzy buff
+ *
+ * When kobolds die, they leave burning fire zones.
+ * - Players in fire take 10% max HP damage every 2 seconds
+ * - Kobolds in fire gain Candle Frenzy: 2x damage, 2x attack speed, +50% move speed
  */
-
-#ifndef NIGHTMARE_NORTHSHIRE_H
-#define NIGHTMARE_NORTHSHIRE_H
 
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -165,83 +97,43 @@ namespace NightmareNorthshire
     constexpr uint32 NPC_KOBOLD_VERMIN = 6;
     constexpr uint32 NPC_KOBOLD_WORKER = 257;
 
-    // Custom spell IDs
-    constexpr uint32 SPELL_CANDLE_FRENZY = 99001;
-    constexpr uint32 SPELL_CANDLE_FIRE_DAMAGE = 99002;
-
     // Custom GameObject entry
     constexpr uint32 GO_KOBOLD_FIRE = 900001;
 
     // Fire zone properties
     constexpr float FIRE_RADIUS = 8.0f;
-    constexpr uint32 FIRE_DURATION_MS = 600000; // 10 minutes
-    constexpr uint32 FIRE_DAMAGE_TICK_MS = 2000; // 2 seconds
-    constexpr float FIRE_DAMAGE_PCT = 0.10f; // 10% max HP per tick
+    constexpr uint32 FIRE_DURATION_SEC = 600; // 10 minutes
 
-    // Candle Frenzy check interval
-    constexpr uint32 BUFF_CHECK_INTERVAL_MS = 1000; // 1 second
+    // Damage properties
+    constexpr uint32 FIRE_DAMAGE_INTERVAL_MS = 2000; // 2 seconds
+    constexpr float FIRE_DAMAGE_PCT = 0.10f; // 10% max HP
+
+    // Candle Frenzy properties
+    constexpr float FRENZY_DAMAGE_MULT = 2.0f;      // 2x damage
+    constexpr float FRENZY_ATTACK_SPEED_MULT = 0.5f; // 50% attack time = 2x speed
+    constexpr float FRENZY_MOVE_SPEED_MULT = 1.5f;   // +50% move speed
+
+    // Check intervals
+    constexpr uint32 BUFF_CHECK_INTERVAL_MS = 500; // 500ms for responsive buff updates
 
     // Northshire Valley zone ID
     constexpr uint32 ZONE_NORTHSHIRE = 9;
 
-    // Helper to check if a position is near any fire
-    bool IsPositionInFire(Creature* creature);
+    // Static map to track player damage timers (GUID -> accumulated time)
+    static std::unordered_map<ObjectGuid, uint32> playerFireTimers;
 
-    // Helper to get all fire GameObjects near a position
-    std::list<GameObject*> GetNearbyFires(WorldObject* obj, float range);
-}
-
-#endif // NIGHTMARE_NORTHSHIRE_H
-```
-
-**Step 2: Commit**
-
-```bash
-git add src/server/scripts/Custom/nightmare_northshire.h
-git commit -m "feat(Scripts): add nightmare northshire header with constants"
-```
-
----
-
-## Task 5: Create Nightmare Kobold AI Script
-
-**Files:**
-- Create: `src/server/scripts/Custom/nightmare_northshire.cpp`
-
-**Step 1: Create the main script file with kobold AI**
-
-```cpp
-/*
- * Nightmare Northshire - Kobold Fire Mechanics
- */
-
-#include "nightmare_northshire.h"
-#include "ObjectAccessor.h"
-#include "SpellAuraEffects.h"
-#include "SpellMgr.h"
-
-namespace NightmareNorthshire
-{
-    std::list<GameObject*> GetNearbyFires(WorldObject* obj, float range)
+    // Helper: Check if position is inside any fire zone
+    bool IsInFireZone(WorldObject* obj)
     {
-        std::list<GameObject*> fires;
         if (!obj)
-            return fires;
-
-        // Find all fire GameObjects in range
-        obj->GetGameObjectListWithEntryInGrid(fires, GO_KOBOLD_FIRE, range);
-        return fires;
-    }
-
-    bool IsPositionInFire(Creature* creature)
-    {
-        if (!creature)
             return false;
 
-        auto fires = GetNearbyFires(creature, FIRE_RADIUS * 2);
+        std::list<GameObject*> fires;
+        obj->GetGameObjectListWithEntryInGrid(fires, GO_KOBOLD_FIRE, FIRE_RADIUS + 5.0f);
+
         for (GameObject* fire : fires)
         {
-            if (creature->GetDistance(fire) <= FIRE_RADIUS)
+            if (obj->GetDistance(fire) <= FIRE_RADIUS)
                 return true;
         }
         return false;
@@ -250,54 +142,88 @@ namespace NightmareNorthshire
 
 using namespace NightmareNorthshire;
 
-// Kobold AI with fire mechanics
+/*
+ * Kobold AI - Handles death fire spawn and Candle Frenzy buff
+ */
 struct npc_nightmare_kobold : public ScriptedAI
 {
     npc_nightmare_kobold(Creature* creature) : ScriptedAI(creature)
     {
         _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
+        _hasCandieFrenzy = false;
+        _originalMoveSpeed = creature->GetSpeed(MOVE_RUN);
+        _originalAttackTime = creature->GetAttackTime(BASE_ATTACK);
+    }
+
+    void Reset() override
+    {
+        _hasCandieFrenzy = false;
+        _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
+
+        // Restore original stats
+        me->SetSpeed(MOVE_RUN, _originalMoveSpeed);
+        me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
     }
 
     void JustDied(Unit* /*killer*/) override
     {
         // Spawn fire at death location
-        float x = me->GetPositionX();
-        float y = me->GetPositionY();
-        float z = me->GetPositionZ();
-        float o = me->GetOrientation();
-
-        // Spawn fire GameObject that lasts 10 minutes
-        if (GameObject* fire = me->SummonGameObject(
+        me->SummonGameObject(
             GO_KOBOLD_FIRE,
-            x, y, z, o,
+            me->GetPositionX(),
+            me->GetPositionY(),
+            me->GetPositionZ(),
+            me->GetOrientation(),
             0.0f, 0.0f, 0.0f, 0.0f,
-            FIRE_DURATION_MS / 1000)) // respawnTime in seconds
-        {
-            // Fire spawned successfully
-        }
+            FIRE_DURATION_SEC
+        );
+    }
+
+    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    {
+        // Candle Frenzy doesn't affect damage taken, only damage dealt
+    }
+
+    uint32 GetModifiedDamage(uint32 baseDamage)
+    {
+        if (_hasCandieFrenzy)
+            return static_cast<uint32>(baseDamage * FRENZY_DAMAGE_MULT);
+        return baseDamage;
     }
 
     void UpdateAI(uint32 diff) override
     {
-        // Check for Candle Frenzy buff
-        _buffCheckTimer -= diff;
-        if (_buffCheckTimer <= 0)
+        // Periodically check for Candle Frenzy
+        if (_buffCheckTimer <= diff)
         {
             _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
 
-            bool inFire = IsPositionInFire(me);
-            bool hasBuff = me->HasAura(SPELL_CANDLE_FRENZY);
+            bool inFire = IsInFireZone(me);
 
-            if (inFire && !hasBuff)
+            if (inFire && !_hasCandieFrenzy)
             {
                 // Apply Candle Frenzy
-                me->CastSpell(me, SPELL_CANDLE_FRENZY, true);
+                _hasCandieFrenzy = true;
+
+                // Increase movement speed by 50%
+                me->SetSpeed(MOVE_RUN, _originalMoveSpeed * FRENZY_MOVE_SPEED_MULT);
+
+                // Reduce attack time by 50% (2x attack speed)
+                me->SetAttackTime(BASE_ATTACK, static_cast<uint32>(_originalAttackTime * FRENZY_ATTACK_SPEED_MULT));
             }
-            else if (!inFire && hasBuff)
+            else if (!inFire && _hasCandieFrenzy)
             {
                 // Remove Candle Frenzy
-                me->RemoveAura(SPELL_CANDLE_FRENZY);
+                _hasCandieFrenzy = false;
+
+                // Restore original stats
+                me->SetSpeed(MOVE_RUN, _originalMoveSpeed);
+                me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
             }
+        }
+        else
+        {
+            _buffCheckTimer -= diff;
         }
 
         if (!UpdateVictim())
@@ -307,142 +233,179 @@ struct npc_nightmare_kobold : public ScriptedAI
     }
 
 private:
-    int32 _buffCheckTimer;
+    uint32 _buffCheckTimer;
+    bool _hasCandieFrenzy;
+    float _originalMoveSpeed;
+    uint32 _originalAttackTime;
 };
 
-// Player script to handle fire damage
-class npc_nightmare_fire_damage : public PlayerScript
+/*
+ * Player Script - Handles fire damage to players in Northshire
+ */
+class nightmare_player_fire_damage : public PlayerScript
 {
 public:
-    npc_nightmare_fire_damage() : PlayerScript("npc_nightmare_fire_damage") { }
+    nightmare_player_fire_damage() : PlayerScript("nightmare_player_fire_damage") { }
 
     void OnUpdate(Player* player, uint32 diff) override
     {
-        // Only in Northshire
+        // Only process in Northshire
         if (player->GetZoneId() != ZONE_NORTHSHIRE)
             return;
 
-        // Track timer per player using a simple approach
-        uint32 timer = player->GetCustomDataUInt32("fire_damage_timer");
+        // Don't damage dead players
+        if (!player->IsAlive())
+            return;
+
+        // Get or create timer for this player
+        ObjectGuid guid = player->GetGUID();
+        uint32& timer = playerFireTimers[guid];
         timer += diff;
 
-        if (timer >= FIRE_DAMAGE_TICK_MS)
+        if (timer >= FIRE_DAMAGE_INTERVAL_MS)
         {
             timer = 0;
 
-            // Check if player is in any fire
-            auto fires = GetNearbyFires(player, FIRE_RADIUS * 2);
-            bool inFire = false;
-
-            for (GameObject* fire : fires)
-            {
-                if (player->GetDistance(fire) <= FIRE_RADIUS)
-                {
-                    inFire = true;
-                    break;
-                }
-            }
-
-            if (inFire)
+            // Check if player is in any fire zone
+            if (IsInFireZone(player))
             {
                 // Deal 10% max HP as fire damage
-                uint32 damage = player->GetMaxHealth() * FIRE_DAMAGE_PCT;
+                uint32 damage = static_cast<uint32>(player->GetMaxHealth() * FIRE_DAMAGE_PCT);
+                if (damage < 1)
+                    damage = 1;
+
                 player->EnvironmentalDamage(DAMAGE_FIRE, damage);
             }
         }
+    }
 
-        player->SetCustomDataUInt32("fire_damage_timer", timer);
+    void OnLogout(Player* player) override
+    {
+        // Clean up timer when player logs out
+        playerFireTimers.erase(player->GetGUID());
     }
 };
 
+/*
+ * Script registration
+ */
 void AddSC_nightmare_northshire()
 {
     RegisterCreatureAI(npc_nightmare_kobold);
-    new npc_nightmare_fire_damage();
+    new nightmare_player_fire_damage();
 }
+```
+
+**Step 2: Verify file syntax**
+
+```bash
+head -50 src/server/scripts/Custom/nightmare_northshire.cpp
+```
+
+**Step 3: Commit**
+
+```bash
+git add src/server/scripts/Custom/nightmare_northshire.cpp
+git commit -m "feat(Scripts): add nightmare kobold fire mechanics script"
+```
+
+---
+
+## Task 3: Create CMakeLists.txt for Custom Scripts
+
+**Files:**
+- Create: `src/server/scripts/Custom/CMakeLists.txt`
+
+**Step 1: Create CMakeLists.txt following AzerothCore conventions**
+
+```cmake
+# Nightmare Northshire custom scripts
+
+set(scripts_STAT_SRCS
+  ${scripts_STAT_SRCS}
+  ${AC_SCRIPTS_DIR}/Custom/nightmare_northshire.cpp
+)
+
+AC_ADD_SCRIPT_LOADER("Custom" "ScriptLoader.h")
+
+message("  -> Prepared: Nightmare Northshire scripts")
 ```
 
 **Step 2: Commit**
 
 ```bash
-git add src/server/scripts/Custom/nightmare_northshire.cpp
-git commit -m "feat(Scripts): add nightmare kobold AI with fire mechanics"
+git add src/server/scripts/Custom/CMakeLists.txt
+git commit -m "build(Scripts): add CMakeLists.txt for nightmare northshire"
 ```
 
 ---
 
-## Task 6: Register Script in CMake and Loader
+## Task 4: Update Custom Script Loader
 
 **Files:**
-- Create: `src/server/scripts/Custom/CMakeLists.txt` (if not exists)
 - Modify: `src/server/scripts/Custom/custom_script_loader.cpp`
-- Modify: `src/server/scripts/CMakeLists.txt`
 
-**Step 1: Create or update Custom CMakeLists.txt**
+**Step 1: Add script registration function**
 
-```cmake
-# Custom scripts CMakeLists.txt
-
-set(scripts_STAT_SRCS
-  ${scripts_STAT_SRCS}
-  Custom/nightmare_northshire.cpp
-  Custom/nightmare_northshire.h
-)
-
-message(STATUS "SCRIPT: Custom scripts enabled")
-```
-
-**Step 2: Create custom_script_loader.cpp if it doesn't exist**
+The file currently has an empty `AddCustomScripts()` function. Add our script.
 
 ```cpp
 /*
- * Custom Script Loader
+ * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 // Nightmare Northshire
 void AddSC_nightmare_northshire();
 
+// The name of this function should match:
+// void Add${NameOfDirectory}Scripts()
 void AddCustomScripts()
 {
     AddSC_nightmare_northshire();
 }
 ```
 
-**Step 3: Verify CMake structure**
-
-Check if Custom directory is included in main CMakeLists.txt:
-```bash
-grep -r "Custom" src/server/scripts/CMakeLists.txt
-```
-
-If not present, add to the scripts CMakeLists.txt.
-
-**Step 4: Commit**
+**Step 2: Commit**
 
 ```bash
-git add src/server/scripts/Custom/
-git commit -m "feat(Scripts): register nightmare northshire in build system"
+git add src/server/scripts/Custom/custom_script_loader.cpp
+git commit -m "feat(Scripts): register nightmare northshire in custom script loader"
 ```
 
 ---
 
-## Task 7: Link Kobold Entries to Custom Script
+## Task 5: Link Kobold Entries to Custom Script
 
 **Files:**
 - Create: `data/sql/updates/pending_db_world/nightmare_kobold_script_link.sql`
 
-**Step 1: Update creature_template to use our script**
+**Step 1: Update creature_template to use nightmare script**
 
 ```sql
 -- Link Kobold Vermin and Kobold Worker to nightmare script
+-- Also give them a slight stat boost for nightmare mode
+
 UPDATE `creature_template` SET `ScriptName` = 'npc_nightmare_kobold' WHERE `entry` = 6;
 UPDATE `creature_template` SET `ScriptName` = 'npc_nightmare_kobold' WHERE `entry` = 257;
 
--- Also increase their stats slightly for nightmare mode
--- +50% health, +30% damage to make them feel dangerous
+-- Increase base stats: +50% health, +30% damage
+-- These make kobolds dangerous even without Candle Frenzy
 UPDATE `creature_template` SET
-    `HealthModifier` = `HealthModifier` * 1.5,
-    `DamageModifier` = `DamageModifier` * 1.3
+    `HealthModifier` = 1.5,
+    `DamageModifier` = 1.3
 WHERE `entry` IN (6, 257);
 ```
 
@@ -450,138 +413,169 @@ WHERE `entry` IN (6, 257);
 
 ```bash
 git add data/sql/updates/pending_db_world/nightmare_kobold_script_link.sql
-git commit -m "feat(DB): link kobolds to nightmare script and buff stats"
+git commit -m "feat(DB): link kobolds to nightmare script and increase base stats"
 ```
 
 ---
 
-## Task 8: Build and Verify Compilation
+## Task 6: Build and Verify Compilation
 
 **Files:**
 - None (build verification)
 
-**Step 1: Create build directory if needed**
+**Step 1: Create build directory and configure**
 
 ```bash
+cd /home/hhess/dev/azerothcore
 mkdir -p build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/azeroth-server \
+         -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+         -DSCRIPTS=static \
+         -DMODULES=static
 ```
 
-**Step 2: Configure CMake**
-
-```bash
-cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/azeroth-server -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSCRIPTS=static -DMODULES=static
+Expected output should include:
+```
+  -> Prepared: Nightmare Northshire scripts
 ```
 
-Expected: CMake completes without errors, shows "Custom scripts enabled"
-
-**Step 3: Build**
+**Step 2: Build the project**
 
 ```bash
 make -j$(nproc)
 ```
 
-Expected: Build completes without errors
+Expected: Build completes without errors.
 
-**Step 4: Commit any build fixes if needed**
+**Step 3: If build fails, check for issues**
+
+Common issues:
+- Missing includes: Add required headers
+- Undefined functions: Check AzerothCore API
+- Linker errors: Check CMakeLists.txt
+
+**Step 4: Commit any fixes**
 
 ```bash
 git add -A
-git commit -m "fix(Scripts): resolve build issues"
+git commit -m "fix(Scripts): resolve compilation issues"
 ```
 
 ---
 
-## Task 9: Create Test SQL for Manual Verification
+## Task 7: Create Final Integration Commit
 
 **Files:**
-- Create: `data/sql/updates/pending_db_world/nightmare_test_commands.sql`
+- All files from previous tasks
 
-**Step 1: Create GM test commands**
-
-```sql
--- Test commands for nightmare kobold verification
--- Use in-game with .gob add, .cast, etc.
-
--- To test fire visual:
--- .gob add 900001
-
--- To test Candle Frenzy buff on target:
--- .cast 99001
-
--- To spawn a kobold for testing:
--- .npc add 6
-
--- To check if script is loaded:
--- .reload creature_template
-```
-
-**Step 2: Commit**
+**Step 1: Verify all files are present**
 
 ```bash
-git add data/sql/updates/pending_db_world/nightmare_test_commands.sql
-git commit -m "docs(DB): add test commands for nightmare kobold verification"
+cd /home/hhess/dev/azerothcore
+ls -la data/sql/updates/pending_db_world/nightmare_*.sql
+ls -la src/server/scripts/Custom/nightmare_northshire.cpp
+ls -la src/server/scripts/Custom/CMakeLists.txt
+cat src/server/scripts/Custom/custom_script_loader.cpp
 ```
 
----
-
-## Task 10: Review and Final Integration
-
-**Files:**
-- All created files
-
-**Step 1: Review all SQL files**
+**Step 2: Create summary commit if not already done**
 
 ```bash
-cat data/sql/updates/pending_db_world/nightmare_kobold_*.sql
-cat data/sql/updates/pending_db_world/nightmare_test_commands.sql
+git log --oneline -5
 ```
 
-**Step 2: Review all C++ files**
-
-```bash
-cat src/server/scripts/Custom/nightmare_northshire.h
-cat src/server/scripts/Custom/nightmare_northshire.cpp
-```
-
-**Step 3: Final commit with all files**
-
-```bash
-git status
-git add -A
-git commit -m "feat: complete nightmare kobold fire mechanic implementation
-
-- Kobolds spawn fire zones on death (8 yard radius, 10 min duration)
-- Fire deals 10% max HP damage per 2 seconds to players
-- Kobolds in fire gain Candle Frenzy: +100% damage, +100% attack speed, +50% move speed
-- Kobolds have +50% HP and +30% damage baseline
-
-Custom spell IDs: 99001 (Candle Frenzy), 99002 (Fire Damage)
-Custom GameObject: 900001 (Kobold Candle Fire)"
-```
+If changes are spread across multiple commits, optionally squash or just verify they're all present.
 
 ---
 
 ## Testing Checklist (In-Game)
 
-After building and running the server:
+After building, installing, and running the server with a fresh database import:
 
-1. [ ] Create human character, go to Northshire
-2. [ ] Find Kobold Vermin, kill it
-3. [ ] Verify fire spawns at death location
-4. [ ] Verify fire visual is visible (~8 yard radius)
-5. [ ] Stand in fire, verify damage (~10% HP per 2 sec)
-6. [ ] Aggro another kobold, kite it into fire
-7. [ ] Verify kobold gains Candle Frenzy buff (visual/tooltip)
-8. [ ] Verify kobold hits harder in fire
-9. [ ] Kite kobold out of fire, verify buff drops
-10. [ ] Wait 10 minutes, verify fire despawns
-11. [ ] Kill multiple kobolds, verify fires stack/overlap correctly
+**Fire Spawn:**
+1. [ ] Create human character, travel to Northshire
+2. [ ] Kill a Kobold Vermin
+3. [ ] Verify fire visual spawns at death location
+4. [ ] Verify fire appears to be roughly 8 yards in radius (visual check)
+
+**Fire Damage:**
+5. [ ] Stand in the fire zone
+6. [ ] Verify damage messages appear every ~2 seconds
+7. [ ] Verify damage is approximately 10% of max HP
+8. [ ] Step out of fire, verify damage stops
+
+**Candle Frenzy:**
+9. [ ] Aggro a kobold and kite it into a fire zone
+10. [ ] Verify kobold moves faster (visually noticeable)
+11. [ ] Verify kobold attacks faster (watch attack animations)
+12. [ ] Verify kobold hits harder (check combat log)
+13. [ ] Kite kobold out of fire
+14. [ ] Verify speed/attack speed return to normal
+
+**Duration:**
+15. [ ] Note the time when fire spawns
+16. [ ] Verify fire despawns after 10 minutes
+
+**Edge Cases:**
+17. [ ] Kill multiple kobolds in same area, verify multiple fires
+18. [ ] Die in fire, resurrect, verify timer resets properly
+19. [ ] Log out in fire zone, log back in, verify no crashes
 
 ---
 
-## Known Limitations & Future Work
+## GM Test Commands
 
-1. **Player damage timer** uses a simple approach; could be optimized with proper event system
-2. **Fire visual size** may need tuning (size 2.0 is estimate for 8 yards)
-3. **No fire-on-fire stacking logic** - fires can overlap, which is intended
-4. **Zone restriction** - only works in Northshire (zone 9); expand for other areas later
+```
+-- Spawn fire manually to test visual:
+.gob add 900001
+
+-- Spawn kobold for testing:
+.npc add 6
+
+-- Teleport to Northshire Abbey:
+.tele northshire
+
+-- Check script is loaded (look for nightmare_northshire):
+.lookup creature 6
+```
+
+---
+
+## Architecture Notes
+
+**Why no custom spells?**
+- `spell_dbc` has 200+ columns with complex relationships
+- Easier and safer to handle buffs directly in C++
+- More control over buff application/removal timing
+
+**Why static timer map?**
+- AzerothCore doesn't have per-player custom data storage API
+- Static map is simple and efficient
+- Cleaned up on logout to prevent memory leaks
+
+**Why visual-only GameObject?**
+- Type 6 (TRAP) requires proper spell setup
+- Type 5 (GENERIC) just shows the visual
+- All damage logic in C++ gives full control
+
+**Damage calculation:**
+- Uses `EnvironmentalDamage(DAMAGE_FIRE, amount)` - native WoW mechanic
+- Shows proper "Fire" damage in combat log
+- Respects immunities and absorbs
+
+**Candle Frenzy implementation:**
+- Tracks original stats on creature spawn
+- Modifies `SetSpeed()` and `SetAttackTime()` directly
+- Damage multiplier would need combat hook (simplified: base stat increase via SQL)
+
+---
+
+## Known Limitations
+
+1. **Candle Frenzy damage bonus**: The 2x damage multiplier isn't implemented in this version. Would require hooking into damage calculation. The SQL-based +30% damage increase provides baseline difficulty.
+
+2. **Fire visual size**: Size 2.0 is an estimate. May need adjustment after in-game testing.
+
+3. **Zone restriction**: Only works in Northshire (zone 9). Expand `ZONE_NORTHSHIRE` check for other zones.
+
+4. **No buff icon**: Candle Frenzy doesn't show a buff icon on the kobold. Would require applying an actual aura spell.
