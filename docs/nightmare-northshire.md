@@ -56,6 +56,11 @@ their base health/damage modifiers. Apply pending updates before running.
 The modifiers are relative boosts applied once by the updater; do not manually
 re-run the migration against an already upgraded database.
 
+The fire template uses a one-time `INSERT` that fails if entry `900001` already
+exists. This deliberately avoids deleting or overwriting an existing template.
+The generic SQL linter requests a preceding `DELETE` for inserts, but its
+separate template-safety rule forbids that deletion; retain the safer insert.
+
 With the current AzerothCore CMake system, `Custom/` is discovered and its C++
 sources are collected automatically when the script module is enabled. No
 separate `Custom/CMakeLists.txt` is necessary. Build with `SCRIPTS=static` or

@@ -17,12 +17,18 @@
 #include <cmath>
 #include <list>
 #include <limits>
+#include <type_traits>
 
 namespace NightmareNorthshire
 {
     constexpr uint32 GO_KOBOLD_FIRE = 900001;
     constexpr uint32 ZONE_ELWYNN_FOREST = 12;
     constexpr char FIRE_EXPOSURE_KEY[] = "NightmareNorthshire.FireExposure";
+
+    enum Events : uint32
+    {
+        EVENT_CHECK_FIRE = 1
+    };
 
     struct Settings
     {
@@ -41,7 +47,12 @@ namespace NightmareNorthshire
     T GetSetting(char const* name, T fallback, T minimum, T maximum)
     {
         // Missing keys are expected because all Nightmare settings are optional.
-        return std::clamp(sConfigMgr->GetOption<T>(name, fallback, false), minimum, maximum);
+        T value = sConfigMgr->GetOption<T>(name, fallback, false);
+        if constexpr (std::is_floating_point_v<T>)
+            if (!std::isfinite(value))
+                return fallback;
+
+        return std::clamp(value, minimum, maximum);
     }
 
     Settings const& GetSettings()
@@ -121,7 +132,8 @@ struct npc_nightmare_kobold : public ScriptedAI
         }
 
         _hasCandleFrenzy = false;
-        _buffCheckTimer = 500;
+        events.Reset();
+        events.ScheduleEvent(EVENT_CHECK_FIRE, 500ms);
     }
 
     void JustEngagedWith(Unit* /*who*/) override
@@ -161,10 +173,10 @@ struct npc_nightmare_kobold : public ScriptedAI
 
     void UpdateAI(uint32 diff) override
     {
-        // Periodically check for Candle Frenzy
-        if (_buffCheckTimer <= diff)
+        events.Update(diff);
+        if (events.ExecuteEvent() == EVENT_CHECK_FIRE)
         {
-            _buffCheckTimer = 500;
+            events.ScheduleEvent(EVENT_CHECK_FIRE, 500ms);
 
             bool inFire = IsInFireZone(me);
 
@@ -188,10 +200,6 @@ struct npc_nightmare_kobold : public ScriptedAI
                 me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
             }
         }
-        else
-        {
-            _buffCheckTimer -= diff;
-        }
 
         if (!UpdateVictim())
             return;
@@ -200,7 +208,6 @@ struct npc_nightmare_kobold : public ScriptedAI
     }
 
 private:
-    uint32 _buffCheckTimer = 500;
     bool _hasCandleFrenzy = false;
     float _originalMoveSpeedRate = 1.0f;
     uint32 _originalAttackTime = 2000;
@@ -233,8 +240,8 @@ public:
             // At most one tick per update after a long server pause.
             exposure->elapsedMs = uint32(elapsed % interval);
 
-            uint32 damage = std::max<uint32>(1,
-                uint32(player->GetMaxHealth() * GetSettings().fireDamagePercent));
+            double scaledDamage = double(player->GetMaxHealth()) * GetSettings().fireDamagePercent;
+            uint32 damage = uint32(std::clamp(scaledDamage, 1.0, double(std::numeric_limits<uint32>::max())));
 
             player->EnvironmentalDamage(DAMAGE_FIRE, damage);
         }
