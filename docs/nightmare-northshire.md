@@ -61,9 +61,10 @@ sources are collected automatically when the script module is enabled. No
 separate `Custom/CMakeLists.txt` is necessary. Build with `SCRIPTS=static` or
 explicitly enable the Custom script module.
 
-The [Nightmare build workflow](../.github/workflows/nightmare-build.yml) runs
-the core's Linux build and dry-run checks on branch pushes and can be started
-manually from GitHub Actions.
+No GitHub Actions workflow is configured for Nightmare. Focused local smoke
+checks cover the fire timer, speed restoration, damage scaling, and spawn cap;
+a complete server build, database import, and in-game verification have not
+been performed.
 
 ## Runtime verification checklist
 
