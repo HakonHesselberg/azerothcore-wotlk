@@ -6,61 +6,100 @@
  * - Kobolds in fire gain Candle Frenzy: 2x damage, 2x attack speed, +50% move speed
  */
 
-#include "ScriptMgr.h"
-#include "ScriptedCreature.h"
+#include "Config.h"
+#include "DataMap.h"
 #include "GameObject.h"
 #include "Player.h"
+#include "ScriptMgr.h"
+#include "ScriptedCreature.h"
 
+#include <algorithm>
+#include <cmath>
 #include <list>
 #include <limits>
-#include <unordered_map>
 
 namespace NightmareNorthshire
 {
-    // Kobold creature entries
-    constexpr uint32 NPC_KOBOLD_VERMIN = 6;
-    constexpr uint32 NPC_KOBOLD_WORKER = 257;
-
-    // Custom GameObject entry
     constexpr uint32 GO_KOBOLD_FIRE = 900001;
+    constexpr uint32 ZONE_ELWYNN_FOREST = 12;
+    constexpr char FIRE_EXPOSURE_KEY[] = "NightmareNorthshire.FireExposure";
 
-    // Fire zone properties
-    constexpr float FIRE_RADIUS = 8.0f;
-    constexpr uint32 FIRE_DURATION_SEC = 600; // 10 minutes
+    struct Settings
+    {
+        float fireRadius;
+        float fireHeightTolerance;
+        uint32 fireDurationSeconds;
+        uint32 fireTickMs;
+        float fireDamagePercent;
+        float frenzyDamageMultiplier;
+        float frenzyAttackTimeMultiplier;
+        float frenzyMoveSpeedMultiplier;
+        uint32 maxNearbyFires;
+    };
 
-    // Damage properties
-    constexpr uint32 FIRE_DAMAGE_INTERVAL_MS = 2000; // 2 seconds
-    constexpr float FIRE_DAMAGE_PCT = 0.10f; // 10% max HP
+    template<typename T>
+    T GetSetting(char const* name, T fallback, T minimum, T maximum)
+    {
+        // Missing keys are expected because all Nightmare settings are optional.
+        return std::clamp(sConfigMgr->GetOption<T>(name, fallback, false), minimum, maximum);
+    }
 
-    // Candle Frenzy properties
-    constexpr uint32 FRENZY_DAMAGE_MULT = 2;         // 2x damage
-    constexpr float FRENZY_ATTACK_SPEED_MULT = 0.5f; // 50% attack time = 2x speed
-    constexpr float FRENZY_MOVE_SPEED_MULT = 1.5f;   // +50% move speed
+    Settings const& GetSettings()
+    {
+        // Settings are loaded on first use; changes require a worldserver restart.
+        static Settings const settings = {
+            GetSetting("Nightmare.FireRadius", 8.0f, 1.0f, 40.0f),
+            GetSetting("Nightmare.FireHeightTolerance", 3.0f, 0.5f, 10.0f),
+            uint32(GetSetting("Nightmare.FireDurationSeconds", int32(600), int32(1), int32(3600))),
+            uint32(GetSetting("Nightmare.FireTickMs", int32(2000), int32(100), int32(60000))),
+            GetSetting("Nightmare.FireDamagePercent", 0.10f, 0.01f, 1.0f),
+            GetSetting("Nightmare.FrenzyDamageMultiplier", 2.0f, 1.0f, 10.0f),
+            GetSetting("Nightmare.FrenzyAttackTimeMultiplier", 0.5f, 0.1f, 1.0f),
+            GetSetting("Nightmare.FrenzyMoveSpeedMultiplier", 1.5f, 1.0f, 3.0f),
+            uint32(GetSetting("Nightmare.MaxNearbyFires", int32(5), int32(1), int32(50)))
+        };
+        return settings;
+    }
 
-    // Check intervals
-    constexpr uint32 BUFF_CHECK_INTERVAL_MS = 500; // 500ms for responsive buff updates
+    struct FireExposure : DataMap::Base
+    {
+        uint32 elapsedMs = 0;
+    };
 
-    // Northshire Valley zone ID
-    constexpr uint32 ZONE_NORTHSHIRE = 9;
+    bool IsNearFire(WorldObject const* obj, GameObject const* fire, float radius)
+    {
+        return obj->GetExactDist2dSq(fire) <= radius * radius &&
+            std::abs(obj->GetPositionZ() - fire->GetPositionZ()) <= GetSettings().fireHeightTolerance;
+    }
 
-    // Static map to track player damage timers (GUID -> accumulated time)
-    static std::unordered_map<ObjectGuid, uint32> playerFireTimers;
-
-    // Helper: Check if position is inside any fire zone
     bool IsInFireZone(WorldObject* obj)
     {
         if (!obj)
             return false;
 
+        float radius = GetSettings().fireRadius;
         std::list<GameObject*> fires;
-        obj->GetGameObjectListWithEntryInGrid(fires, GO_KOBOLD_FIRE, FIRE_RADIUS + 5.0f);
+        obj->GetGameObjectListWithEntryInGrid(fires, GO_KOBOLD_FIRE, radius + 5.0f);
 
         for (GameObject* fire : fires)
-        {
-            if (obj->GetDistance(fire) <= FIRE_RADIUS)
+            if (IsNearFire(obj, fire, radius))
                 return true;
-        }
+
         return false;
+    }
+
+    bool CanSpawnAnotherFire(Creature* creature)
+    {
+        float radius = GetSettings().fireRadius * 2.0f;
+        std::list<GameObject*> fires;
+        creature->GetGameObjectListWithEntryInGrid(fires, GO_KOBOLD_FIRE, radius + 5.0f);
+
+        uint32 nearbyFires = 0;
+        for (GameObject* fire : fires)
+            if (IsNearFire(creature, fire, radius) && ++nearbyFires >= GetSettings().maxNearbyFires)
+                return false;
+
+        return true;
     }
 }
 
@@ -71,26 +110,31 @@ using namespace NightmareNorthshire;
  */
 struct npc_nightmare_kobold : public ScriptedAI
 {
-    npc_nightmare_kobold(Creature* creature) : ScriptedAI(creature)
-    {
-        _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
-        _hasCandleFrenzy = false;
-        _originalMoveSpeed = creature->GetSpeed(MOVE_RUN);
-        _originalAttackTime = creature->GetAttackTime(BASE_ATTACK);
-    }
+    npc_nightmare_kobold(Creature* creature) : ScriptedAI(creature) { }
 
     void Reset() override
     {
-        _hasCandleFrenzy = false;
-        _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
+        if (_hasCandleFrenzy)
+        {
+            me->SetSpeed(MOVE_RUN, _originalMoveSpeedRate);
+            me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
+        }
 
-        // Restore original stats
-        me->SetSpeed(MOVE_RUN, _originalMoveSpeed);
-        me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
+        _hasCandleFrenzy = false;
+        _buffCheckTimer = 500;
+    }
+
+    void JustEngagedWith(Unit* /*who*/) override
+    {
+        // Preserve the original SmartAI aggro dialogue (creature_text group 0).
+        Talk(0);
     }
 
     void JustDied(Unit* /*killer*/) override
     {
+        if (!CanSpawnAnotherFire(me))
+            return;
+
         // Spawn fire at death location
         me->SummonGameObject(
             GO_KOBOLD_FIRE,
@@ -99,7 +143,7 @@ struct npc_nightmare_kobold : public ScriptedAI
             me->GetPositionZ(),
             me->GetOrientation(),
             0.0f, 0.0f, 0.0f, 0.0f,
-            FIRE_DURATION_SEC,
+            GetSettings().fireDurationSeconds,
             true,
             GO_SUMMON_TIMED_DESPAWN
         );
@@ -110,10 +154,8 @@ struct npc_nightmare_kobold : public ScriptedAI
     {
         if (_hasCandleFrenzy)
         {
-            if (damage > std::numeric_limits<uint32>::max() / FRENZY_DAMAGE_MULT)
-                damage = std::numeric_limits<uint32>::max();
-            else
-                damage *= FRENZY_DAMAGE_MULT;
+            double scaledDamage = double(damage) * GetSettings().frenzyDamageMultiplier;
+            damage = uint32(std::min(scaledDamage, double(std::numeric_limits<uint32>::max())));
         }
     }
 
@@ -122,28 +164,27 @@ struct npc_nightmare_kobold : public ScriptedAI
         // Periodically check for Candle Frenzy
         if (_buffCheckTimer <= diff)
         {
-            _buffCheckTimer = BUFF_CHECK_INTERVAL_MS;
+            _buffCheckTimer = 500;
 
             bool inFire = IsInFireZone(me);
 
             if (inFire && !_hasCandleFrenzy)
             {
-                // Apply Candle Frenzy
+                _originalMoveSpeedRate = me->GetSpeedRate(MOVE_RUN);
+                _originalAttackTime = me->GetAttackTime(BASE_ATTACK);
                 _hasCandleFrenzy = true;
 
-                // Increase movement speed by 50%
-                me->SetSpeed(MOVE_RUN, _originalMoveSpeed * FRENZY_MOVE_SPEED_MULT);
+                me->SetSpeed(MOVE_RUN,
+                    _originalMoveSpeedRate * GetSettings().frenzyMoveSpeedMultiplier);
 
-                // Reduce attack time by 50% (2x attack speed)
-                me->SetAttackTime(BASE_ATTACK, static_cast<uint32>(_originalAttackTime * FRENZY_ATTACK_SPEED_MULT));
+                me->SetAttackTime(BASE_ATTACK,
+                    uint32(_originalAttackTime * GetSettings().frenzyAttackTimeMultiplier));
             }
             else if (!inFire && _hasCandleFrenzy)
             {
-                // Remove Candle Frenzy
                 _hasCandleFrenzy = false;
 
-                // Restore original stats
-                me->SetSpeed(MOVE_RUN, _originalMoveSpeed);
+                me->SetSpeed(MOVE_RUN, _originalMoveSpeedRate);
                 me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
             }
         }
@@ -159,10 +200,10 @@ struct npc_nightmare_kobold : public ScriptedAI
     }
 
 private:
-    uint32 _buffCheckTimer;
-    bool _hasCandleFrenzy;
-    float _originalMoveSpeed;
-    uint32 _originalAttackTime;
+    uint32 _buffCheckTimer = 500;
+    bool _hasCandleFrenzy = false;
+    float _originalMoveSpeedRate = 1.0f;
+    uint32 _originalAttackTime = 2000;
 };
 
 /*
@@ -175,39 +216,35 @@ public:
 
     void OnPlayerUpdate(Player* player, uint32 diff) override
     {
-        // Clear the timer when the player leaves Northshire or dies.
-        if (player->GetZoneId() != ZONE_NORTHSHIRE || !player->IsAlive())
+        // Northshire subareas belong to Elwynn Forest (zone 12, not area 9).
+        if (player->GetZoneId() != ZONE_ELWYNN_FOREST || !player->IsAlive() ||
+            !IsInFireZone(player))
         {
-            playerFireTimers.erase(player->GetGUID());
+            player->CustomData.Erase(FIRE_EXPOSURE_KEY);
             return;
         }
 
-        // Get or create timer for this player
-        ObjectGuid guid = player->GetGUID();
-        uint32& timer = playerFireTimers[guid];
-        timer += diff;
+        FireExposure* exposure = player->CustomData.GetDefault<FireExposure>(FIRE_EXPOSURE_KEY);
+        uint32 interval = GetSettings().fireTickMs;
+        uint64 elapsed = uint64(exposure->elapsedMs) + diff;
 
-        if (timer >= FIRE_DAMAGE_INTERVAL_MS)
+        if (elapsed >= interval)
         {
-            timer %= FIRE_DAMAGE_INTERVAL_MS;
+            // At most one tick per update after a long server pause.
+            exposure->elapsedMs = uint32(elapsed % interval);
 
-            // Check if player is in any fire zone
-            if (IsInFireZone(player))
-            {
-                // Deal 10% max HP as fire damage
-                uint32 damage = static_cast<uint32>(player->GetMaxHealth() * FIRE_DAMAGE_PCT);
-                if (damage < 1)
-                    damage = 1;
+            uint32 damage = std::max<uint32>(1,
+                uint32(player->GetMaxHealth() * GetSettings().fireDamagePercent));
 
-                player->EnvironmentalDamage(DAMAGE_FIRE, damage);
-            }
+            player->EnvironmentalDamage(DAMAGE_FIRE, damage);
         }
+        else
+            exposure->elapsedMs = uint32(elapsed);
     }
 
     void OnPlayerLogout(Player* player) override
     {
-        // Clean up timer when player logs out
-        playerFireTimers.erase(player->GetGUID());
+        player->CustomData.Erase(FIRE_EXPOSURE_KEY);
     }
 };
 

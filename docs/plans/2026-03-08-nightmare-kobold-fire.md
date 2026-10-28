@@ -1,5 +1,11 @@
 # Nightmare Kobold Fire Mechanic Implementation Plan
 
+> **Historical plan:** This document contains superseded implementation details,
+> including old hooks, a now-unnecessary CMake file, and obsolete damage logic.
+> For the implemented behavior, configuration, and verification guidance, see
+> [Nightmare Northshire](../nightmare-northshire.md). Do not copy the code below
+> into current AzerothCore without checking the updated APIs.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** When kobolds die, they leave a burning fire zone that damages players and empowers other kobolds standing in it.
