@@ -11,6 +11,10 @@
 #include "GameObject.h"
 #include "Player.h"
 
+#include <list>
+#include <limits>
+#include <unordered_map>
+
 namespace NightmareNorthshire
 {
     // Kobold creature entries
@@ -29,7 +33,7 @@ namespace NightmareNorthshire
     constexpr float FIRE_DAMAGE_PCT = 0.10f; // 10% max HP
 
     // Candle Frenzy properties
-    constexpr float FRENZY_DAMAGE_MULT = 2.0f;      // 2x damage
+    constexpr uint32 FRENZY_DAMAGE_MULT = 2;         // 2x damage
     constexpr float FRENZY_ATTACK_SPEED_MULT = 0.5f; // 50% attack time = 2x speed
     constexpr float FRENZY_MOVE_SPEED_MULT = 1.5f;   // +50% move speed
 
@@ -95,20 +99,22 @@ struct npc_nightmare_kobold : public ScriptedAI
             me->GetPositionZ(),
             me->GetOrientation(),
             0.0f, 0.0f, 0.0f, 0.0f,
-            FIRE_DURATION_SEC
+            FIRE_DURATION_SEC,
+            true,
+            GO_SUMMON_TIMED_DESPAWN
         );
     }
 
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
-    {
-        // Candle Frenzy doesn't affect damage taken, only damage dealt
-    }
-
-    uint32 GetModifiedDamage(uint32 baseDamage)
+    void DamageDealt(Unit* /*victim*/, uint32& damage,
+        DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
         if (_hasCandleFrenzy)
-            return static_cast<uint32>(baseDamage * FRENZY_DAMAGE_MULT);
-        return baseDamage;
+        {
+            if (damage > std::numeric_limits<uint32>::max() / FRENZY_DAMAGE_MULT)
+                damage = std::numeric_limits<uint32>::max();
+            else
+                damage *= FRENZY_DAMAGE_MULT;
+        }
     }
 
     void UpdateAI(uint32 diff) override
@@ -167,15 +173,14 @@ class nightmare_player_fire_damage : public PlayerScript
 public:
     nightmare_player_fire_damage() : PlayerScript("nightmare_player_fire_damage") { }
 
-    void OnUpdate(Player* player, uint32 diff) override
+    void OnPlayerUpdate(Player* player, uint32 diff) override
     {
-        // Only process in Northshire
-        if (player->GetZoneId() != ZONE_NORTHSHIRE)
+        // Clear the timer when the player leaves Northshire or dies.
+        if (player->GetZoneId() != ZONE_NORTHSHIRE || !player->IsAlive())
+        {
+            playerFireTimers.erase(player->GetGUID());
             return;
-
-        // Don't damage dead players
-        if (!player->IsAlive())
-            return;
+        }
 
         // Get or create timer for this player
         ObjectGuid guid = player->GetGUID();
@@ -184,7 +189,7 @@ public:
 
         if (timer >= FIRE_DAMAGE_INTERVAL_MS)
         {
-            timer = 0;
+            timer %= FIRE_DAMAGE_INTERVAL_MS;
 
             // Check if player is in any fire zone
             if (IsInFireZone(player))
@@ -199,7 +204,7 @@ public:
         }
     }
 
-    void OnLogout(Player* player) override
+    void OnPlayerLogout(Player* player) override
     {
         // Clean up timer when player logs out
         playerFireTimers.erase(player->GetGUID());
