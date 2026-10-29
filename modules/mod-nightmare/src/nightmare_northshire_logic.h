@@ -15,6 +15,26 @@
 
 namespace NightmareNorthshire::Rules
 {
+    enum class FleeAction
+    {
+        None,
+        Start,
+        Stop
+    };
+
+    // The movement adapter supplies ownership separately from permission to start:
+    // an external fear/confusion must never be removed by Nightmare cleanup.
+    inline FleeAction DecideFlee(uint32 health, uint32 maxHealth, float thresholdPercent,
+        bool frenzy, bool engaged, bool ownsMovement, bool canStart, bool feared)
+    {
+        bool shouldFlee = health && maxHealth && engaged && !frenzy && !feared &&
+            double(health) * 100.0 <= double(maxHealth) * thresholdPercent;
+        if (ownsMovement)
+            return shouldFlee ? FleeAction::None : FleeAction::Stop;
+
+        return shouldFlee && canStart ? FleeAction::Start : FleeAction::None;
+    }
+
     inline bool IsWithinFire(float horizontalDistanceSquared, float heightDifference,
         float radius, float heightTolerance)
     {

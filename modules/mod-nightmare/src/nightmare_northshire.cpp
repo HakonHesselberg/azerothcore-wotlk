@@ -9,15 +9,18 @@
 #include "Config.h"
 #include "CombatLogPackets.h"
 #include "DataMap.h"
+#include "FleeingMovementGenerator.h"
 #include "GameObject.h"
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
+#include "SpellAuraEffects.h"
 #include "nightmare_northshire_logic.h"
 
 #include <algorithm>
 #include <cmath>
 #include <list>
+#include <memory>
 #include <type_traits>
 
 namespace NightmareNorthshire
@@ -42,6 +45,7 @@ namespace NightmareNorthshire
         float frenzyAttackTimeMultiplier;
         float frenzyMoveSpeedMultiplier;
         uint32 maxNearbyFires;
+        float fleeHealthPercent;
     };
 
     template<typename T>
@@ -68,10 +72,31 @@ namespace NightmareNorthshire
             GetSetting("Nightmare.FrenzyDamageMultiplier", 2.0f, 1.0f, 10.0f),
             GetSetting("Nightmare.FrenzyAttackTimeMultiplier", 0.5f, 0.1f, 1.0f),
             GetSetting("Nightmare.FrenzyMoveSpeedMultiplier", 1.5f, 1.0f, 3.0f),
-            uint32(GetSetting("Nightmare.MaxNearbyFires", int32(5), int32(1), int32(50)))
+            uint32(GetSetting("Nightmare.MaxNearbyFires", int32(5), int32(1), int32(50))),
+            GetSetting("Nightmare.FleeHealthPercent", 20.0f, 1.0f, 100.0f)
         };
         return settings;
     }
+
+    // Reuse the core escape pathfinding. The marker is invalidated on both
+    // replacement and destruction, so cleanup cannot remove somebody else's fear.
+    class KoboldFleeingMovement final : public FleeingMovementGenerator<Creature>
+    {
+    public:
+        KoboldFleeingMovement(ObjectGuid enemy, std::shared_ptr<bool> active) :
+            FleeingMovementGenerator<Creature>(enemy), _active(active) { }
+
+        ~KoboldFleeingMovement() override { *_active = false; }
+
+        void Finalize(Unit* owner) override
+        {
+            *_active = false;
+            FleeingMovementGenerator<Creature>::Finalize(owner);
+        }
+
+    private:
+        std::shared_ptr<bool> _active;
+    };
 
     struct FireExposure : DataMap::Base
     {
@@ -155,6 +180,7 @@ struct npc_nightmare_kobold : public ScriptedAI
 
     void Reset() override
     {
+        StopFleeing();
         _candleFrenzy.SetActive(*me, false, GetSettings().frenzyAttackTimeMultiplier,
             GetSettings().frenzyMoveSpeedMultiplier);
         events.Reset();
@@ -169,6 +195,7 @@ struct npc_nightmare_kobold : public ScriptedAI
 
     void JustDied(Unit* /*killer*/) override
     {
+        StopFleeing();
         _candleFrenzy.SetActive(*me, false, GetSettings().frenzyAttackTimeMultiplier,
             GetSettings().frenzyMoveSpeedMultiplier);
 
@@ -212,14 +239,60 @@ struct npc_nightmare_kobold : public ScriptedAI
                 _candleFrenzy.RefreshMovement(*me, GetSettings().frenzyMoveSpeedMultiplier);
         }
 
-        if (!UpdateVictim())
+        bool hasVictim = UpdateVictim() && me->GetVictim();
+        UpdateFleeing(hasVictim);
+        if (!hasVictim || IsFleeing() || me->HasUnitState(UNIT_STATE_CANNOT_AUTOATTACK))
             return;
 
         DoMeleeAttackIfReady();
     }
 
 private:
+    bool IsFleeing() const
+    {
+        return _fleeing && *_fleeing;
+    }
+
+    void StopFleeing()
+    {
+        if (IsFleeing())
+        {
+            me->StopMoving();
+            me->GetMotionMaster()->MovementExpiredOnSlot(MOTION_SLOT_CONTROLLED);
+            // SetControlled ignores a newly applied fear while our generator has
+            // already set UNIT_STATE_FLEEING. Restore that aura's control now that
+            // our generator has finalized, rather than silently curing the fear.
+            if (me->IsAlive() && me->HasFearAura())
+                me->SetControlled(true, UNIT_STATE_FLEEING,
+                    me->GetAuraEffectsByType(SPELL_AURA_MOD_FEAR).front()->GetCaster(), true);
+        }
+        _fleeing.reset();
+    }
+
+    void UpdateFleeing(bool hasVictim)
+    {
+        MotionMaster* motion = me->GetMotionMaster();
+        bool canStart = !motion->GetMotionSlot(MOTION_SLOT_CONTROLLED) &&
+            !me->HasUnitState(UNIT_STATE_LOST_CONTROL) && !me->HasUnitFlag(UNIT_FLAG_DISABLE_MOVE) &&
+            !me->IsCharmed() && !me->IsInEvadeMode();
+        Rules::FleeAction action = Rules::DecideFlee(me->GetHealth(), me->GetMaxHealth(),
+            GetSettings().fleeHealthPercent, _candleFrenzy.Active(), hasVictim, IsFleeing(), canStart,
+            me->HasFearAura());
+
+        if (action == Rules::FleeAction::Stop)
+            StopFleeing();
+        else if (action == Rules::FleeAction::Start)
+        {
+            _fleeing = std::make_shared<bool>(true);
+            // MoveFleeing cannot attach an ownership marker; install its same
+            // generator in its same slot, without timed assistance behavior.
+            motion->Mutate(new KoboldFleeingMovement(me->GetVictim()->GetGUID(), _fleeing),
+                MOTION_SLOT_CONTROLLED);
+        }
+    }
+
     Rules::CandleFrenzy _candleFrenzy;
+    std::shared_ptr<bool> _fleeing;
 };
 
 /*

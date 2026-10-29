@@ -24,3 +24,7 @@ Nightmare.FrenzyMoveSpeedMultiplier = 1.5
 
 # Maximum fires within twice the fire radius (1-50).
 Nightmare.MaxNearbyFires = 5
+
+# Flee at or below this percentage of max health unless Candle Frenzy is active (1-100).
+# Shared by Northshire Vermin, Workers and Laborers. Fleeing does not seek assistance.
+Nightmare.FleeHealthPercent = 20.0

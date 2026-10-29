@@ -125,3 +125,58 @@ player/creature interactions in the checklist below.
   Live aura stacking and movement packets remain in-game checks.
 - Fire is scoped to Elwynn Forest for player damage. Additional zones require
   an explicit scope change.
+
+## Shared low-health behavior (Laborer implementation)
+
+Vermin (6), Workers (257), and Laborers (80) now use the same AI. They attempt
+ordinary core escape movement at or below `Nightmare.FleeHealthPercent` (default
+20%, range 1–100) while engaged with a victim and outside Candle Frenzy.
+Frenzy stops a Nightmare-owned escape; leaving fire at low health allows escape
+again. Healing above the threshold, combat exit/reset, and death stop that escape.
+Root/slow/haste effects remain handled by the core; the escape adds no speed
+modifier. Fear/confusion or another controlled movement takes precedence, and
+Nightmare cleanup never intentionally removes that replacement movement.
+The flee generator chooses escape paths without seeking allies or calling an
+assistance API; ordinary nearby-creature aggro/assistance rules still apply.
+Fire exposure/Frenzy checks retain their existing 500 ms cadence.
+
+Laborer death uses the existing Candle Fire lifetime and shared nearby-fire cap.
+Laborers keep their native faction, stats, spawns, aggro dialogue (group 0), loot,
+and quest 21 objectives. The migration explicitly clears `AIName` on the three
+entries so SmartAI cannot override the shared script.
+
+Deployment: the new migration is staged in
+`data/sql/updates/pending_db_world/rev_1793304582886642446.sql` under repository
+SQL-editing policy, rather than the module SQL directory. Apply it to a world
+database only together with the enabled, updated Nightmare module; do not ship
+it independently to a server without the module. Before distributing module-only
+SQL, move/package this migration under explicit authorization. Do not replay the
+old stat-multiplier migration. Removing the module later requires restoring the
+upstream SmartAI binding for these entries.
+
+The base world data identifies 25 Laborer spawns on map 0 (GUID 247,
+80060, 80064–80071, 80074–80088), clustered around Northshire. Exact current
+spawn coverage and indoor placement need effective database/client confirmation.
+
+Verification for this change: seven native `NightmareCowardice` regression cases
+were added for threshold boundaries/configuration, repeated updates, Frenzy
+transitions, healing/death/combat exit, external movement precedence, fear handoff and large
+health values. The existing 14 fire/Frenzy tests remain in place. These additions
+have not been compiled or run: repository instructions prohibit builds without
+an explicit request. Earlier verification results above predate this change.
+No new game-client or worldserver verification is claimed.
+
+Client checks for the shared behavior:
+
+1. Aggro each of the three entries; check hostility and original aggro dialogue.
+2. Reduce health to 20% and verify escape rather than melee, without an explicit
+   run-to-allies action. Change the threshold and restart to check configuration.
+3. Ignite Frenzy during escape; verify it stops escaping and resumes combat.
+   Leave fire while still low and verify escaping becomes possible again.
+4. Heal above threshold, evade/reset, kill and respawn; check no stale movement.
+5. Apply root, slow, fear and confusion during escape. Verify external movement
+   survives Frenzy activation and cleanup, and ordinary combat resumes afterward.
+6. Kill Laborers beside existing fires; verify capped fire spawning and original
+   fire lifetime/damage/Frenzy behavior for all three entries.
+
+This change does not introduce mine supports or rockfall damage.

@@ -183,3 +183,56 @@ TEST(NightmareFrenzy, MovementRecalculatesChangingBuffsAndSlows)
     EXPECT_FLOAT_EQ(unit.runRate, 0.5f);
     EXPECT_EQ(unit.recalculations, 4u);
 }
+
+TEST(NightmareCowardice, ThresholdIncludesBoundaryAndUsesConfiguredPercent)
+{
+    EXPECT_EQ(DecideFlee(21, 100, 20.0f, false, true, false, true, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(20, 100, 20.0f, false, true, false, true, false), FleeAction::Start);
+    EXPECT_EQ(DecideFlee(19, 100, 20.0f, false, true, false, true, false), FleeAction::Start);
+    EXPECT_EQ(DecideFlee(200, 1000, 20.0f, false, true, false, true, false), FleeAction::Start);
+    EXPECT_EQ(DecideFlee(25, 100, 30.0f, false, true, false, true, false), FleeAction::Start);
+    EXPECT_EQ(DecideFlee(25, 100, 10.0f, false, true, false, true, false), FleeAction::None);
+}
+
+TEST(NightmareCowardice, DoesNotRestartAnActiveEscape)
+{
+    for (uint32 tick = 0; tick < 100; ++tick)
+        EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, true, false, false), FleeAction::None);
+}
+
+TEST(NightmareCowardice, FrenzyStopsEscapeAndEndingFrenzyAllowsItAgain)
+{
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, true, true, false, true, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, true, true, true, false, false), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, false, true, false), FleeAction::Start);
+}
+
+TEST(NightmareCowardice, HealingDeathAndCombatExitStopOnlyOwnedEscape)
+{
+    EXPECT_EQ(DecideFlee(21, 100, 20.0f, false, true, true, false, false), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(0, 100, 20.0f, false, true, true, false, false), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, false, true, false, false), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(0, 100, 20.0f, false, false, false, true, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(10, 0, 20.0f, false, true, false, true, false), FleeAction::None);
+}
+
+TEST(NightmareCowardice, LeavesExternalMovementAloneAndCanRetryAfterItEnds)
+{
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, false, false, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, true, true, false, false, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, false, true, false), FleeAction::Start);
+}
+
+TEST(NightmareCowardice, HealthArithmeticDoesNotOverflow)
+{
+    uint32 maximum = std::numeric_limits<uint32>::max();
+    EXPECT_EQ(DecideFlee(maximum, maximum, 20.0f, false, true, false, true, false), FleeAction::None);
+    EXPECT_EQ(DecideFlee(maximum / 10, maximum, 20.0f, false, true, false, true, false), FleeAction::Start);
+}
+
+TEST(NightmareCowardice, FearAppliedDuringEscapeReleasesOwnershipEvenWithoutFrenzy)
+{
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, true, false, true), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, true, true, true, false, true), FleeAction::Stop);
+    EXPECT_EQ(DecideFlee(10, 100, 20.0f, false, true, false, true, true), FleeAction::None);
+}
