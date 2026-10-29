@@ -7,6 +7,7 @@
  */
 
 #include "Config.h"
+#include "CombatLogPackets.h"
 #include "DataMap.h"
 #include "GameObject.h"
 #include "Player.h"
@@ -111,6 +112,34 @@ namespace NightmareNorthshire
                 return false;
 
         return true;
+    }
+
+    // Preserve AzerothCore's environmental fire logging and resist/absorb rules
+    // without changing Player::EnvironmentalDamage in the upstream core.
+    void DealFireDamage(Player* player, uint32 damage)
+    {
+        if (player->IsImmuneToEnvironmentalDamage())
+            return;
+
+        DamageInfo damageInfo(player, player, damage, nullptr, SPELL_SCHOOL_MASK_FIRE, DIRECT_DAMAGE);
+        Unit::CalcAbsorbResist(damageInfo);
+        uint32 absorb = damageInfo.GetAbsorb();
+        uint32 resist = damageInfo.GetResist();
+        damage = damageInfo.GetDamage();
+
+        Unit::DealDamageMods(player, damage, &absorb);
+
+        WorldPackets::CombatLog::EnvironmentalDamageLog packet;
+        packet.Victim = player->GetGUID();
+        packet.Type = DAMAGE_FIRE;
+        packet.Amount = damage;
+        packet.Absorbed = absorb;
+        packet.Resisted = resist;
+        player->SendMessageToSet(packet.Write(), true);
+
+        Unit::DealDamage(player, player, damage, nullptr, SELF_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+        if (!player->IsAlive())
+            player->UpdateAchievementCriteria(ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM, 1, DAMAGE_FIRE);
     }
 }
 
@@ -243,7 +272,7 @@ public:
             double scaledDamage = double(player->GetMaxHealth()) * GetSettings().fireDamagePercent;
             uint32 damage = uint32(std::clamp(scaledDamage, 1.0, double(std::numeric_limits<uint32>::max())));
 
-            player->EnvironmentalDamage(DAMAGE_FIRE, damage);
+            DealFireDamage(player, damage);
         }
         else
             exposure->elapsedMs = uint32(elapsed);

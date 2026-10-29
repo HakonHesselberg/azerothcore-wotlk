@@ -1,6 +1,6 @@
-# Nightmare Northshire
+# Nightmare Northshire (`mod-nightmare`)
 
-This document describes the **current** Nightmare Kobold implementation. The
+This document describes the **current** Nightmare Kobold module. The
 original [implementation plan](plans/2026-03-08-nightmare-kobold-fire.md) is
 historical and contains superseded API examples.
 
@@ -45,14 +45,14 @@ Nightmare.FireDamagePercent = 0.10
 Nightmare.MaxNearbyFires = 5
 ```
 
-These keys affect only the Nightmare script. The fire visual's model scale is
+These keys affect only the Nightmare module. The fire visual's model scale is
 set separately by SQL and need not exactly match the damage radius.
 
 ## Database and build
 
-The two world-database updates in `data/sql/updates/pending_db_world/` define
+The two world-database updates in `modules/mod-nightmare/data/sql/db-world/` define
 the fire template, assign the C++ script to both kobold templates, and set
-their base health/damage modifiers. Apply pending updates before running.
+their base health/damage modifiers. The module's updater installs them automatically.
 The modifiers are relative boosts applied once by the updater; do not manually
 re-run the migration against an already upgraded database.
 
@@ -61,15 +61,14 @@ exists. This deliberately avoids deleting or overwriting an existing template.
 The generic SQL linter requests a preceding `DELETE` for inserts, but its
 separate template-safety rule forbids that deletion; retain the safer insert.
 
-With the current AzerothCore CMake system, `Custom/` is discovered and its C++
-sources are collected automatically when the script module is enabled. No
-separate `Custom/CMakeLists.txt` is necessary. Build with `SCRIPTS=static` or
-explicitly enable the Custom script module.
+Build with `MODULES=static`.
+The module has its own script loader and needs no custom core script registration.
+Its fire-damage handling includes fire resistance, absorbs and an environmental
+combat log, without changing core `Player.cpp`.
 
-No GitHub Actions workflow is configured for Nightmare. Focused local smoke
-checks cover the fire timer, speed restoration, damage scaling, and spawn cap;
-a complete server build, database import, and in-game verification have not
-been performed.
+No GitHub Actions workflow is used for Nightmare. Prior local checks covered
+the fire timer, speed restoration, damage scaling, and spawn cap; the module
+conversion requires its own verification and eventual in-game testing.
 
 ## Runtime verification checklist
 

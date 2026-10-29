@@ -827,11 +827,10 @@ uint32 Player::EnvironmentalDamage(EnviromentalDamage type, uint32 damage)
 
     switch (type)
     {
-        case DAMAGE_FIRE:
         case DAMAGE_LAVA:
         case DAMAGE_SLIME:
         {
-            DamageInfo dmgInfo(this, this, damage, nullptr, type == DAMAGE_SLIME ? SPELL_SCHOOL_MASK_NATURE : SPELL_SCHOOL_MASK_FIRE, DIRECT_DAMAGE);
+            DamageInfo dmgInfo(this, this, damage, nullptr, type == DAMAGE_LAVA ? SPELL_SCHOOL_MASK_FIRE : SPELL_SCHOOL_MASK_NATURE, DIRECT_DAMAGE);
             Unit::CalcAbsorbResist(dmgInfo);
             absorb = dmgInfo.GetAbsorb();
             resist = dmgInfo.GetResist();
