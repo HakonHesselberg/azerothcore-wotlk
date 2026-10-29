@@ -66,9 +66,12 @@ The module has its own script loader and needs no custom core script registratio
 Its fire-damage handling includes fire resistance, absorbs and an environmental
 combat log, without changing core `Player.cpp`.
 
-No GitHub Actions workflow is used for Nightmare. Prior local checks covered
-the fire timer, speed restoration, damage scaling, and spawn cap; the module
-conversion requires its own verification and eventual in-game testing.
+Local verification (2026-10-29): A full `MODULES=static` Release build linked
+`authserver`, `worldserver`, and the unit tests; both servers' `--help` passed.
+The module C++ also passed `-Wall -Wextra -Werror`. Both SQL updates applied
+successfully on a disposable MySQL 8.4.13 world schema. The native suite passed
+5,958 tests, skipped 5,479, and failed none. No GitHub Actions were used. The
+in-game checks below still require a WoW client and game data.
 
 ## Runtime verification checklist
 
