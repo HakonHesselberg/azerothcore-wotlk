@@ -9,4 +9,9 @@ their migration history. Do not manually replay the one-time SQL updates.
 
 Gameplay, settings, and checks: [Nightmare Northshire](../../docs/nightmare-northshire.md).
 
+Configuration defaults are supplied in `conf/mod-nightmare.conf.dist`. Copy the
+installed file to `etc/modules/mod-nightmare.conf` to customize the nine gameplay
+settings. With `BUILD_TESTING=ON`, 14 module regression cases join the native
+`unit_tests` target.
+
 No GitHub Actions are needed or used for Nightmare verification.

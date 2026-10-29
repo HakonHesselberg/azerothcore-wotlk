@@ -11,7 +11,11 @@ historical and contains superseded API examples.
 - Players in fire take fire-school environmental damage after each full exposure
   interval. Leaving the fire resets the timer. Fire resistance and absorbs apply.
 - Kobolds inside fire gain doubled outgoing damage, faster attacks and faster
-  movement. Their original speed *rate* and attack time are restored on exit.
+  movement. Attack haste is applied and removed through AzerothCore's reversible
+  attack-time modifier. Run speed is recalculated from the current creature
+  stats, buffs, debuffs and health effects before applying the Frenzy multiplier,
+  and is recalculated again on exit or reset. No old speed or attack-time
+  snapshot is restored.
 - The kobolds retain their original aggro text through `JustEngagedWith`.
 - A nearby-fire cap prevents unlimited overlapping gameobjects in a small area.
 
@@ -21,9 +25,12 @@ gameobject, which also covers Northshire subareas such as the abbey and mine.
 
 ## Configuration
 
-The following optional keys may be added to `worldserver.conf`. They are
-read on first use; **restart worldserver after changing them**. Values outside
-the supported ranges are clamped.
+All keys have defaults in
+`modules/mod-nightmare/conf/mod-nightmare.conf.dist`, which AzerothCore installs
+as `etc/modules/mod-nightmare.conf.dist`. Copy it to
+`etc/modules/mod-nightmare.conf` for an installation-specific configuration.
+Settings are read on first use; **restart worldserver after changing them**.
+Values outside the supported ranges are clamped.
 
 | Key | Default | Range | Description |
 | --- | ---: | ---: | --- |
@@ -36,14 +43,6 @@ the supported ranges are clamped.
 | `Nightmare.FrenzyAttackTimeMultiplier` | 0.5 | 0.1–1.0 | Base-attack-time multiplier |
 | `Nightmare.FrenzyMoveSpeedMultiplier` | 1.5 | 1–3 | Movement-rate multiplier |
 | `Nightmare.MaxNearbyFires` | 5 | 1–50 | Maximum fires within twice the radius |
-
-Example:
-
-```ini
-Nightmare.FireRadius = 8.0
-Nightmare.FireDamagePercent = 0.10
-Nightmare.MaxNearbyFires = 5
-```
 
 These keys affect only the Nightmare module. The fire visual's model scale is
 set separately by SQL and need not exactly match the damage radius.
@@ -66,12 +65,39 @@ The module has its own script loader and needs no custom core script registratio
 Its fire-damage handling includes fire resistance, absorbs and an environmental
 combat log, without changing core `Player.cpp`.
 
-Local verification (2026-10-29): A full `MODULES=static` Release build linked
-`authserver`, `worldserver`, and the unit tests; both servers' `--help` passed.
-The module C++ also passed `-Wall -Wextra -Werror`. Both SQL updates applied
-successfully on a disposable MySQL 8.4.13 world schema. The native suite passed
-5,958 tests, skipped 5,479, and failed none. No GitHub Actions were used. The
-in-game checks below still require a WoW client and game data.
+Local verification (2026-10-29, Ubuntu 24.04, Clang 18, MySQL 8.0.46):
+
+- A full Release/Ninja build with `MODULES=static` and `BUILD_TESTING=ON`
+  compiled and linked `authserver`, `worldserver`, and `unit_tests`. Both
+  server binaries passed `--help`. CMake installation put
+  `mod-nightmare.conf.dist` in `etc/modules/`.
+- All **14** new `Nightmare*` regression tests passed (fire damage/caps,
+  exposure timing, radius and spawn limits, plus reversible Frenzy attack and
+  movement behavior). The full native suite reported **5,972 passed, 5,479
+  skipped, 0 failed** (11,451 cases run; one additional test disabled).
+  `ctest --output-on-failure` passed its 1/1 native test target. The first
+  sandboxed full-suite attempt had nine existing config tests fail because
+  `/tmp` was inaccessible; rerunning locally with temporary-file access
+  passed all nine, with no code changes.
+- On a **disposable MySQL 8.0.46** instance, `authserver` populated the auth
+  schema and listened on TCP 3724. `worldserver` connected to auth, characters,
+  and world, loaded `mod-nightmare.conf`, populated and updated both game
+  schemas, initialized scripts and game data, and reached a healthy listening
+  state on TCP 8085. The server log reported `WORLD: World Initialized In 0
+  Minutes 38 Seconds` followed by `ready...`; `Errors.log` was empty. Realm 1
+  reported online (`flag=0`, game build 12340).
+- The world schema recorded `nightmare_kobold_fire_gameobject.sql` and
+  `nightmare_kobold_script_link.sql` with state `MODULE`. Creature entries 6
+  and 257 both had `ScriptName=npc_nightmare_kobold`, HealthModifier 1.5 and
+  DamageModifier 1.3. GameObject 900001 existed (type 5, display 5752,
+  size 2.0). There were 108 character tables and 314 world tables.
+- Server data used the [AC Data v20 enUS release](https://github.com/wowgaming/client-data/releases/tag/v20.0)
+  (DBC/maps/vmaps/mmaps), verified against its published SHA-256 checksum.
+  A nonfatal process-priority permission warning appeared at startup.
+  **No WoW client and no GitHub Actions were used.**
+
+This verifies headless initialization and listening state, not the live
+player/creature interactions in the checklist below.
 
 ## Runtime verification checklist
 
@@ -91,7 +117,11 @@ in-game checks below still require a WoW client and game data.
 ## Known constraints
 
 - No Candle Frenzy buff icon is shown; the behavior is implemented in C++.
-- Changes to unrelated movement effects while Candle Frenzy is active may
-  need a more elaborate modifier-based implementation for perfect stacking.
+- Run-speed recomputation occurs every 500 ms while Frenzy is active. Very
+  short-lived speed effects can have up to one check interval before Frenzy's
+  extra speed is reapplied; the speed is always calculated from current effects.
+- The native Frenzy interaction tests use a lightweight Unit-API stand-in,
+  since constructing a live creature requires initialized world/map data.
+  Live aura stacking and movement packets remain in-game checks.
 - Fire is scoped to Elwynn Forest for player damage. Additional zones require
   an explicit scope change.

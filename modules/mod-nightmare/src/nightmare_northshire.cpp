@@ -13,11 +13,11 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
+#include "nightmare_northshire_logic.h"
 
 #include <algorithm>
 #include <cmath>
 #include <list>
-#include <limits>
 #include <type_traits>
 
 namespace NightmareNorthshire
@@ -80,8 +80,8 @@ namespace NightmareNorthshire
 
     bool IsNearFire(WorldObject const* obj, GameObject const* fire, float radius)
     {
-        return obj->GetExactDist2dSq(fire) <= radius * radius &&
-            std::abs(obj->GetPositionZ() - fire->GetPositionZ()) <= GetSettings().fireHeightTolerance;
+        return Rules::IsWithinFire(obj->GetExactDist2dSq(fire),
+            obj->GetPositionZ() - fire->GetPositionZ(), radius, GetSettings().fireHeightTolerance);
     }
 
     bool IsInFireZone(WorldObject* obj)
@@ -108,7 +108,8 @@ namespace NightmareNorthshire
 
         uint32 nearbyFires = 0;
         for (GameObject* fire : fires)
-            if (IsNearFire(creature, fire, radius) && ++nearbyFires >= GetSettings().maxNearbyFires)
+            if (IsNearFire(creature, fire, radius) &&
+                !Rules::HasFireCapacity(++nearbyFires, GetSettings().maxNearbyFires))
                 return false;
 
         return true;
@@ -154,13 +155,8 @@ struct npc_nightmare_kobold : public ScriptedAI
 
     void Reset() override
     {
-        if (_hasCandleFrenzy)
-        {
-            me->SetSpeed(MOVE_RUN, _originalMoveSpeedRate);
-            me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
-        }
-
-        _hasCandleFrenzy = false;
+        _candleFrenzy.SetActive(*me, false, GetSettings().frenzyAttackTimeMultiplier,
+            GetSettings().frenzyMoveSpeedMultiplier);
         events.Reset();
         events.ScheduleEvent(EVENT_CHECK_FIRE, 500ms);
     }
@@ -173,6 +169,9 @@ struct npc_nightmare_kobold : public ScriptedAI
 
     void JustDied(Unit* /*killer*/) override
     {
+        _candleFrenzy.SetActive(*me, false, GetSettings().frenzyAttackTimeMultiplier,
+            GetSettings().frenzyMoveSpeedMultiplier);
+
         if (!CanSpawnAnotherFire(me))
             return;
 
@@ -193,11 +192,8 @@ struct npc_nightmare_kobold : public ScriptedAI
     void DamageDealt(Unit* /*victim*/, uint32& damage,
         DamageEffectType /*damageType*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
-        if (_hasCandleFrenzy)
-        {
-            double scaledDamage = double(damage) * GetSettings().frenzyDamageMultiplier;
-            damage = uint32(std::min(scaledDamage, double(std::numeric_limits<uint32>::max())));
-        }
+        if (_candleFrenzy.Active())
+            damage = Rules::FrenzyDamage(damage, GetSettings().frenzyDamageMultiplier);
     }
 
     void UpdateAI(uint32 diff) override
@@ -209,25 +205,11 @@ struct npc_nightmare_kobold : public ScriptedAI
 
             bool inFire = IsInFireZone(me);
 
-            if (inFire && !_hasCandleFrenzy)
-            {
-                _originalMoveSpeedRate = me->GetSpeedRate(MOVE_RUN);
-                _originalAttackTime = me->GetAttackTime(BASE_ATTACK);
-                _hasCandleFrenzy = true;
-
-                me->SetSpeed(MOVE_RUN,
-                    _originalMoveSpeedRate * GetSettings().frenzyMoveSpeedMultiplier);
-
-                me->SetAttackTime(BASE_ATTACK,
-                    uint32(_originalAttackTime * GetSettings().frenzyAttackTimeMultiplier));
-            }
-            else if (!inFire && _hasCandleFrenzy)
-            {
-                _hasCandleFrenzy = false;
-
-                me->SetSpeed(MOVE_RUN, _originalMoveSpeedRate);
-                me->SetAttackTime(BASE_ATTACK, _originalAttackTime);
-            }
+            if (inFire != _candleFrenzy.Active())
+                _candleFrenzy.SetActive(*me, inFire, GetSettings().frenzyAttackTimeMultiplier,
+                    GetSettings().frenzyMoveSpeedMultiplier);
+            else if (inFire)
+                _candleFrenzy.RefreshMovement(*me, GetSettings().frenzyMoveSpeedMultiplier);
         }
 
         if (!UpdateVictim())
@@ -237,9 +219,7 @@ struct npc_nightmare_kobold : public ScriptedAI
     }
 
 private:
-    bool _hasCandleFrenzy = false;
-    float _originalMoveSpeedRate = 1.0f;
-    uint32 _originalAttackTime = 2000;
+    Rules::CandleFrenzy _candleFrenzy;
 };
 
 /*
@@ -261,21 +241,11 @@ public:
         }
 
         FireExposure* exposure = player->CustomData.GetDefault<FireExposure>(FIRE_EXPOSURE_KEY);
-        uint32 interval = GetSettings().fireTickMs;
-        uint64 elapsed = uint64(exposure->elapsedMs) + diff;
-
-        if (elapsed >= interval)
+        if (Rules::AdvanceExposure(exposure->elapsedMs, diff, GetSettings().fireTickMs))
         {
-            // At most one tick per update after a long server pause.
-            exposure->elapsedMs = uint32(elapsed % interval);
-
-            double scaledDamage = double(player->GetMaxHealth()) * GetSettings().fireDamagePercent;
-            uint32 damage = uint32(std::clamp(scaledDamage, 1.0, double(std::numeric_limits<uint32>::max())));
-
-            DealFireDamage(player, damage);
+            DealFireDamage(player, Rules::FireDamage(player->GetMaxHealth(),
+                GetSettings().fireDamagePercent));
         }
-        else
-            exposure->elapsedMs = uint32(elapsed);
     }
 
     void OnPlayerLogout(Player* player) override

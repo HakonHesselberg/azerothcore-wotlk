@@ -1,0 +1,26 @@
+# Nightmare Northshire. Installed under configs/modules/ by AzerothCore.
+# Copy to mod-nightmare.conf to customize; restart worldserver after changes.
+# Invalid out-of-range values are clamped to the documented range.
+
+# Fire radius in yards (1.0-40.0) and vertical tolerance (0.5-10.0).
+Nightmare.FireRadius = 8.0
+Nightmare.FireHeightTolerance = 3.0
+
+# Lifetime in seconds (1-3600) and player damage interval in ms (100-60000).
+Nightmare.FireDurationSeconds = 600
+Nightmare.FireTickMs = 2000
+
+# Fraction of maximum HP per tick (0.01-1.0; 0.10 means 10%).
+Nightmare.FireDamagePercent = 0.10
+
+# Kobold Candle Frenzy damage factor (1.0-10.0).
+Nightmare.FrenzyDamageMultiplier = 2.0
+
+# Attack period factor (0.1-1.0; 0.5 means twice as many swings).
+Nightmare.FrenzyAttackTimeMultiplier = 0.5
+
+# Run speed factor (1.0-3.0; 1.5 means +50% speed).
+Nightmare.FrenzyMoveSpeedMultiplier = 1.5
+
+# Maximum fires within twice the fire radius (1-50).
+Nightmare.MaxNearbyFires = 5
