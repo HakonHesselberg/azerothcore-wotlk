@@ -12,6 +12,10 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
+#include "SpellAuraEffects.h"
+#include "SpellAuras.h"
+#include "SpellInfo.h"
+#include "SpellMgr.h"
 #include "nightmare_wolves_logic.h"
 
 #include <algorithm>
@@ -28,6 +32,10 @@ namespace NightmareWolves
 {
     constexpr uint32 NPC_DISEASED_TIMBER_WOLF = 69;
     constexpr uint32 NPC_DISEASED_YOUNG_WOLF = 299;
+    // This client-known disease provides the Infected Bite icon and name. Only
+    // its flat-damage aura effect is created, with amount zero, so Nightmare's
+    // own damage and movement rules remain the sole gameplay effects.
+    constexpr uint32 SPELL_INFECTED_BITE_ICON = 7367;
     constexpr char INFECTION_KEY[] = "NightmareWolves.InfectedBite";
     constexpr float HOWL_HEIGHT_TOLERANCE = 5.0f;
 
@@ -85,6 +93,53 @@ namespace NightmareWolves
         std::array<float, MOVE_TYPES.size()> appliedRates{};
     };
 
+    bool RefreshInfectionIcon(Player* player, uint8 stacks)
+    {
+        SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(SPELL_INFECTED_BITE_ICON);
+        if (!spellInfo)
+            return false;
+
+        uint8 effectIndex = MAX_SPELL_EFFECTS;
+        for (uint8 index = 0; index < MAX_SPELL_EFFECTS; ++index)
+        {
+            if (spellInfo->Effects[index].IsAura(SPELL_AURA_MOD_DAMAGE_TAKEN))
+            {
+                effectIndex = index;
+                break;
+            }
+        }
+
+        if (effectIndex == MAX_SPELL_EFFECTS)
+            return false;
+
+        Aura* aura = player->GetAura(SPELL_INFECTED_BITE_ICON, player->GetGUID());
+        if (!aura)
+        {
+            aura = Aura::TryCreate(spellInfo, uint8(1u << effectIndex), player, player);
+            if (!aura)
+                return false;
+
+            // Suppress the stock spell's physical vulnerability. The original
+            // periodic-damage effect is omitted entirely by the effect mask.
+            aura->GetEffect(effectIndex)->SetAmount(0);
+            aura->ApplyForTargets();
+        }
+
+        // Client aura packets use charges when a stock spell is non-stackable.
+        // This makes the icon show 1-10 without changing the server debuff.
+        if (spellInfo->StackAmount)
+        {
+            aura->SetStackAmount(stacks);
+            aura->GetEffect(effectIndex)->ChangeAmount(0, false);
+        }
+        else
+            aura->SetCharges(stacks);
+
+        aura->SetMaxDuration(int32(GetSettings().infectionDurationMs));
+        aura->SetDuration(int32(GetSettings().infectionDurationMs));
+        return true;
+    }
+
     void RefreshMovement(Player* player, Infection& infection, bool force)
     {
         float multiplier = Rules::MovementMultiplier(infection.stacks, GetSettings().slowPerStack);
@@ -116,7 +171,7 @@ namespace NightmareWolves
         }
     }
 
-    void ClearInfection(Player* player, bool notifyClient = true)
+    void ClearInfection(Player* player, bool notifyClient = true, bool removeIcon = true)
     {
         Infection* infection = player->CustomData.Get<Infection>(INFECTION_KEY);
         if (!infection)
@@ -129,6 +184,8 @@ namespace NightmareWolves
             player->UpdateSpeed(type, notifyClient);
 
         player->CustomData.Erase(INFECTION_KEY);
+        if (removeIcon)
+            player->RemoveAura(SPELL_INFECTED_BITE_ICON, player->GetGUID());
     }
 
     void ApplyInfectedBite(Player* player)
@@ -138,11 +195,15 @@ namespace NightmareWolves
         infection->elapsedMs = 0;
         RefreshMovement(player, *infection, true);
 
-        uint32 damagePercent = uint32(infection->stacks * GetSettings().damageBonusPerStack * 100.0f);
-        uint32 slowPercent = uint32(infection->stacks * GetSettings().slowPerStack * 100.0f);
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "Infected Bite: {}/{} stacks (+{}% damage taken, {}% movement slow).",
-            infection->stacks, GetSettings().maxStacks, damagePercent, slowPercent);
+        bool iconVisible = RefreshInfectionIcon(player, infection->stacks);
+        if (infection->stacks == 1 || !iconVisible)
+        {
+            uint32 damagePercent = uint32(infection->stacks * GetSettings().damageBonusPerStack * 100.0f);
+            uint32 slowPercent = uint32(infection->stacks * GetSettings().slowPerStack * 100.0f);
+            ChatHandler(player->GetSession()).PSendSysMessage(
+                "Nightmare Infected Bite: {}/{} stacks (+{}% damage taken, {}% slower).",
+                infection->stacks, GetSettings().maxStacks, damagePercent, slowPercent);
+        }
     }
 
     void RecruitWolves(Creature* caller, Unit* target)
@@ -226,6 +287,18 @@ public:
             return Rules::IncreasedDamage(damage, infection->stacks, GetSettings().damageBonusPerStack);
 
         return damage;
+    }
+
+    void OnAuraRemove(Unit* unit, AuraApplication* aurApp, AuraRemoveMode /*mode*/) override
+    {
+        if (!unit || !unit->IsPlayer() || !aurApp ||
+            aurApp->GetBase()->GetId() != SPELL_INFECTED_BITE_ICON ||
+            aurApp->GetBase()->GetCasterGUID() != unit->GetGUID())
+            return;
+
+        // Cleansing or dispelling the visible disease also clears its gameplay
+        // modifiers; ClearInfection itself removes the icon after erasing state.
+        ClearInfection(unit->ToPlayer(), true, false);
     }
 };
 

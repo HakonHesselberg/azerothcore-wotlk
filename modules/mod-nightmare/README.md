@@ -15,8 +15,10 @@ Diseased Young Wolves (299) and Diseased Timber Wolves (69) are hostile by defau
 Every successful melee hit on a player adds one Infected Bite stack (maximum 10).
 Each stack increases all incoming damage by 10% and slows movement by 10%.
 At 10 stacks, the player is rooted. All stacks expire 10 seconds after the last bite.
-The current implementation reports the stack count and modifiers in system chat;
-it does not create a new client-side aura icon.
+The debuff uses the client's existing Infected Bite (7367) icon with a visible
+stack count and countdown. Its stock tooltip does not describe Nightmare's
+custom modifiers, so the first bite also explains the actual effects in system
+chat. Dispelling the disease removes both the icon and Nightmare's modifiers.
 
 Once per combat, a wolf at or below 50% health warns nearby players with a text
 emote, then calls every unengaged Diseased Young/Timber Wolf within 30 yards after
