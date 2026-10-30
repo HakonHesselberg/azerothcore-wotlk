@@ -28,3 +28,20 @@ Nightmare.MaxNearbyFires = 5
 # Flee at or below this percentage of max health unless Candle Frenzy is active (1-100).
 # Shared by Northshire Vermin, Workers and Laborers. Fleeing does not seek assistance.
 Nightmare.FleeHealthPercent = 20.0
+
+# Diseased wolves: Infected Bite lasts 10 seconds and stacks up to 10 times.
+# Each successful wolf melee hit refreshes the duration and adds one stack.
+Nightmare.WolfMaxStacks = 10
+Nightmare.WolfInfectionDurationMs = 10000
+
+# Each stack increases damage taken from every source and slows movement by 10%.
+# At 10 stacks with the defaults, movement is completely stopped.
+Nightmare.WolfDamageBonusPerStack = 0.10
+Nightmare.WolfSlowPerStack = 0.10
+
+# Wolves howl once per combat at or below 50% health. After the warning,
+# every eligible unengaged wolf within 30 yards joins the fight.
+# Recruited wolves may howl themselves when wounded.
+Nightmare.WolfHowlHealthPercent = 50.0
+Nightmare.WolfHowlWarningMs = 2000
+Nightmare.WolfHowlRadius = 30.0
