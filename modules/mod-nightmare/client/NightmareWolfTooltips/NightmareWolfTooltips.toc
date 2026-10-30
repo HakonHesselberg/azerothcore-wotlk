@@ -1,0 +1,6 @@
+## Interface: 30300
+## Title: Nightmare |cffcc3333Wolf Tooltips|r
+## Notes: Accurate Nightmare Infected Bite tooltip for World of Warcraft 3.3.5a
+## Version: 1.0.0
+
+NightmareWolfTooltips.lua

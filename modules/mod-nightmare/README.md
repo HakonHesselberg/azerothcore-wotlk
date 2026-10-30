@@ -30,6 +30,31 @@ the call.
 The seven optional wolf settings in `conf/mod-nightmare.conf.dist` are loaded on
 first use and require a worldserver restart to change.
 
+### Accurate Infected Bite tooltip (optional client addon)
+
+WoW 3.3.5a obtains the spell tooltip description from its client files, not
+AzerothCore's server scripts. The server sends the icon, stacks and duration,
+but changing the tooltip text requires a client-side addon.
+
+Copy `client/NightmareWolfTooltips/` from this module into the **game client's**
+`World of Warcraft/Interface/AddOns/NightmareWolfTooltips/` directory. The
+directory must contain `NightmareWolfTooltips.toc` and
+`NightmareWolfTooltips.lua`. Enable the addon at character selection and
+log in or type `/reload`.
+
+Hover the Infected Bite debuff on your player frame. The addon replaces the
+stock tooltip with the **current** damage taken, movement slow, rooted state
+(if applicable), stack count, and remaining duration. It does not change
+combat mechanics or require a server restart. Other players must also install
+the addon to see the custom tooltip. Custom third-party tooltip frames might
+not use the hooked Blizzard methods.
+
+The Lua defaults assume ten stacks, +10% damage taken and -10% movement
+per stack, with a ten-second aura duration. If you change these values in
+`mod-nightmare.conf`, update the matching constants in the Lua addon too.
+Without the addon, the original client tooltip remains visible.
+
+
 Configuration defaults are supplied in `conf/mod-nightmare.conf.dist`. Copy the
 installed file to `etc/modules/mod-nightmare.conf` to customize the gameplay
 settings. With `BUILD_TESTING=ON`, the module's regression cases join the native
